@@ -1,6 +1,8 @@
 CPPEI
 =====
 
+// under development
+
 C++ bindings for EI (Erlang Interface)
 
 Example:
