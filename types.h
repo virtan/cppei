@@ -4,6 +4,7 @@
 #include <typeinfo>
 #include <string>
 #include <cassert>
+#include <deque>
 
 namespace cppei {
 
@@ -26,6 +27,7 @@ class term_t {
                 , typename enable_if<is_base_of<term_check, typename decay<T>::type>::value>::type* = 0)
             : ptr(new impl<typename decay<T>::type>(forward<T>(o))) {}
         term_t &operator=(const term_t &o) { delete ptr; ptr = o.ptr ? o.ptr->clone() : 0; return *this; }
+        term_t &operator=(term_t &o) { delete ptr; ptr = o.ptr ? o.ptr->clone() : 0; return *this; }
         term_t &operator=(term_t &&o) { delete ptr; ptr = o.ptr; o.ptr = 0; return *this; }
         template<class T> term_t &operator=(T &&o) {
             typename enable_if<is_base_of<term_check, typename decay<T>::type>::value>::type *check;
@@ -105,6 +107,7 @@ class base_t : public term_check {
         base_t &operator=(const S &t) { value = t; bound = true; return *this; }
         base_t &operator=(S &&t) { value = forward<S>(t); bound = true; return *this; }
         bool operator==(const base_t &o) const { if(!bound || !o.bound) throw unbound(); return value == o.value; }
+        bool operator!=(const base_t &o) const { return !operator==(o); }
         bool operator==(const S &t) const { if(!bound) throw unbound(); return value == t; }
         bool operator!=(const S &t) const { return !operator==(t); }
         bool operator<(const base_t &o) const { if(!bound || !o.bound) throw unbound(); return value < o.value; }
@@ -113,9 +116,10 @@ class base_t : public term_check {
         bool operator<=(const S &t) const { return operator<(t) || operator==(t); }
         bool operator>=(const S &t) const { return operator>(t) || operator==(t); }
         operator const S& () const { if(!bound) throw unbound(); return value; }
+        void swap(base_t &o) { std::swap(bound, o.bound); std::swap(value, o.value); }
         void swap(S &s) { if(!bound) throw unbound(); std::swap(value, s); }
         bool is_bound() const { return bound; }
-    private:
+    protected:
         S value;
         bool bound;
 };
@@ -123,5 +127,49 @@ class base_t : public term_check {
 typedef base_t<string> atom_t;
 typedef base_t<int> integer_t;
 typedef base_t<double> floating_t;
+typedef base_t<string> binary_t;
+
+template<int sub_type>
+class container_t : public base_t<deque<term_t>> {
+    public:
+        enum empty_t { empty_list };
+        typedef deque<term_t>::iterator iterator;
+        typedef deque<term_t>::const_iterator const_iterator;
+        container_t() { bound = false; }
+        container_t(empty_t) { bound = true; }
+        template<class... Types>
+        container_t(Types... args...) {
+            bound = true;
+            [](...){}((value.push_front(args),1)...);
+        }
+        container_t(const container_t &o) { operator=(o); }
+        container_t(container_t &&o) { operator=(forward<container_t>(o)); }
+        container_t &operator=(const container_t &o) { value = o.value; bound = o.bound; }
+        container_t &operator=(container_t &&o) { value = move(o.value); bound = o.bound; o.bound = false; }
+        bool operator==(const container_t &o) const {
+            if(!bound || !o.bound) throw unbound(); return value == o.value;
+        }
+        bool operator!=(const container_t &o) const { return !operator==(o); }
+        void swap(container_t &o) { std::swap(bound, o.bound); std::swap(value, o.value); }
+        bool is_bound() const { return bound; }
+        iterator begin() { return value.begin(); }
+        iterator end() { return value.end(); }
+        const_iterator begin() const { return value.begin(); }
+        const_iterator end() const { return value.end(); }
+        size_t size() const { if(!bound) throw unbound(); return value.size(); }
+        void push_front(const term_t &t) { bound = true; value.push_front(t); }
+        void push_front(term_t &&t) { bound = true; value.emplace_front(t); }
+        void push_back(const term_t &t) { bound = true; value.push_back(t); }
+        void push_back(term_t &&t) { bound = true; value.emplace_back(t); }
+        void pop_front() { if(!bound) throw unbound(); value.pop_front(); }
+        void pop_back() { if(!bound) throw unbound(); value.pop_back(); }
+        term_t &front() { if(!bound) throw unbound(); return value.front(); }
+        const term_t &front() const { if(!bound) throw unbound(); return value.front(); }
+        term_t &back() { if(!bound) throw unbound(); return value.back(); }
+        const term_t &back() const { if(!bound) throw unbound(); return value.back(); }
+};
+
+typedef container_t<0> tuple_t;
+typedef container_t<1> list_t;
 
 }

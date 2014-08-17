@@ -153,6 +153,16 @@ int main() {
     assert(a2 == "some string 2");
     }
 
+    cout << "tuple_t operations\n";
+    term_t t = tuple_t(atom_t("hello"), binary_t("world"));
+    assert(t.is_bound());
+    cout << "tuple_t size\n";
+    assert(((tuple_t&)t).size() == 2);
+    cout << "tuple_t front access\n";
+    assert(((tuple_t&)t).front().is_bound());
+    cout << "tuple_t front comparison\n";
+    assert(((tuple_t&)t).front() == atom_t("hello"));
+
 
     /*
     atom_t a2(a1);
