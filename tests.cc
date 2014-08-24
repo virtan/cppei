@@ -153,6 +153,7 @@ int main() {
     assert(a2 == "some string 2");
     }
 
+    {
     cout << "tuple_t operations\n";
     term_t t = tuple_t(atom_t("hello"), binary_t("world"));
     assert(t.cast<tuple_t>().is_bound());
@@ -162,6 +163,32 @@ int main() {
     assert(t.cast<tuple_t>().front().is_bound());
     cout << "tuple_t front comparison\n";
     assert(t.cast<tuple_t>().front() == atom_t("hello"));
+
+    cout << "list_t operations\n";
+    term_t t2 = list_t(atom_t("hello"), binary_t("world"));
+    assert(t2.cast<list_t>().is_bound());
+    cout << "list_t size\n";
+    assert(t2.cast<list_t>().size() == 2);
+    cout << "list_t front access\n";
+    assert(t2.cast<list_t>().front().is_bound());
+    cout << "list_t front comparison\n";
+    assert(t2.cast<list_t>().front() == atom_t("hello"));
+
+    cout << "tuple_t and list_t are different types\n";
+    assert(t != t2);
+    }
+
+    {
+    cout << "matching\n";
+    term_t t = tuple_t(atom_t("hello"), tuple_t(atom_t("hello"), binary_t("world")));
+    atom_t a("hello"); binary_t b;
+    assert(a.is_bound());
+    assert(!b.is_bound());
+    //assert((tuple_t(a, tuple_t(a, b)) = t) == true);
+    assert(a == atom_t("hello"));
+    assert(b.is_bound());
+    assert(b == binary_t("world"));
+    }
 
 
     /*

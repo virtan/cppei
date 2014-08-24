@@ -47,29 +47,25 @@ class term_t {
         // comparison operators
         bool operator==(const term_t &t) const {
             if(!is_bound() || !t.is_bound()) throw unbound();
-            if(ptr->type() != t.ptr->type()) {
-                return false;
-            } else {
-                return ptr->operator==(t.ptr);
-            }
+            if(ptr->type() != t.ptr->type()) return false;
+            else return ptr->operator==(t.ptr);
         }
         template<class T> bool operator==(const T &t) const {
             typename enable_if<is_base_of<term_check, typename decay<T>::type>::value>::type *check;
-            if(!is_bound()) throw unbound();
-            impl<typename decay<T>::type> *p = dynamic_cast<impl<typename decay<T>::type>*>(ptr);
-            if(p == 0) { // different types
-                return false;
-            } else {
-                return p->val == t;
-            }
+            auto p = dcast<T>();
+            if(p == 0) return false; // different types
+            else return p->val == t;
         }
         template<class T> bool operator!=(const T &t) const { return !operator==(t); }
+        template<class T> bool match_type(const T &) const {
+            typename enable_if<is_base_of<term_check, typename decay<T>::type>::value>::type *check;
+            return dcast<T>() != 0;
+        }
         // clone, swap, casting and is_bound methods
         bool is_bound() const { return ptr != 0; }
         template<class T> void clone(T &t
                 , typename enable_if<is_base_of<term_check, typename decay<T>::type>::value>::type* = 0) const {
-            if(!is_bound()) throw unbound();
-            impl<typename decay<T>::type> *p = dynamic_cast<impl<typename decay<T>::type>*>(ptr);
+            auto p = dcast<T>();
             assert(p);
             t = p->val;
         }
@@ -82,17 +78,19 @@ class term_t {
         }
         template<class T> T &cast() {
             typename enable_if<is_base_of<term_check, typename decay<T>::type>::value>::type *check;
-            if(!is_bound()) throw unbound();
-            impl<typename decay<T>::type> *p = dynamic_cast<impl<typename decay<T>::type>*>(ptr);
-            if(p == 0) { // different types
-                throw incompatible();
-            } else {
-                return forward<T&>(p->val);
-            }
+            auto p = dcast<T>();
+            if(p == 0) throw incompatible(); // different types
+            else return forward<T&>(p->val);
         }
         template<class T> operator T () { return cast<T>(); }
         
     private:
+        template<class T> impl<typename decay<T>::type> *dcast() {
+            if(!is_bound()) throw unbound();
+            impl<typename decay<T>::type> *p = dynamic_cast<impl<typename decay<T>::type>*>(ptr);
+            return p; // 0 if different types
+        }
+
         struct placeholder {
             virtual ~placeholder() {}
             virtual const type_info &type() const = 0;
@@ -151,6 +149,7 @@ class base_t : public term_check {
         void swap(base_t &o) { std::swap(bound, o.bound); std::swap(value, o.value); }
         void swap(S &s) { if(!bound) throw unbound(); std::swap(value, s); }
         bool is_bound() const { return bound; }
+        bool is_container() const { return false; }
 
     protected:
         S value;
@@ -172,36 +171,55 @@ class base_t<deque<term_t>, variant> : public term_check {
         base_t(const term_t &o) { *this = o; }
         base_t(term_t &&o) { *this = move(o); }
         template<class... Types>
-        base_t(Types... args...) {
+        base_t(Types... args) {
             bound = true;
-            [](...){}((value.push_front(args),1)...);
+            [](...){}((value.push_front(args), refs.push_front((void*) &args), 1)...);
         }
         // assign operators
-        base_t &operator=(const base_t &o) { value = o.value; bound = o.bound; }
-        base_t &operator=(base_t &&o) { value = move(o.value); bound = o.bound; o.bound = false; }
+        base_t &operator=(const base_t &o) { value = o.value; refs = o.refs; bound = o.bound; }
+        base_t &operator=(base_t &&o) { value = move(o.value); refs = move(o.refs); bound = o.bound; o.bound = false; }
         base_t &operator=(const term_t &o) { o.clone(*this); return *this; }
         base_t &operator=(term_t &&o) { o.swap(*this); o = term_t(); return *this; }
-        // comparison operators
+        // comparison and match operators
         bool operator==(const base_t &o) const {
             if(!bound || !o.bound) throw unbound();
-            return value == o.value;
+            if(is_bound()) return value == o.value;
+            else if(size() != o.size()) return false;
+            else {
+                assert(value.size() == refs.size());
+                auto vi = value.begin();
+                auto ri = refs.begin();
+                auto oi = o.begin();
+                while(vi != value.end()) {
+                    if(vi->is_bound() || vi->is_container()) { if(*vi != *oi) return false; }
+                    else if(vi->match_type(*oi)) { *vi = *oi; assign ri; }
+                    else return false;
+                    ++vi; ++ri; ++oi;
+                }
+                return true;
+            }
         }
         bool operator!=(const base_t &o) const { return !operator==(o); }
         // swap and is_bound
-        void swap(base_t &o) { std::swap(bound, o.bound); std::swap(value, o.value); }
-        bool is_bound() const { return bound; }
+        void swap(base_t &o) { std::swap(bound, o.bound); std::swap(value, o.value); std::swap(refs, o.refs); }
+        bool is_bound() const {
+            bool recursive_bound = true;
+            for(auto &i : value) recursive_bound &= i.is_bound();
+            return bound && recursive_bound;
+        }
+        bool is_container() const { return true; }
         // container-related methods
         iterator begin() { return value.begin(); }
         iterator end() { return value.end(); }
         const_iterator begin() const { return value.begin(); }
         const_iterator end() const { return value.end(); }
         size_t size() const { if(!bound) throw unbound(); return value.size(); }
-        void push_front(const term_t &t) { bound = true; value.push_front(t); }
-        void push_front(term_t &&t) { bound = true; value.emplace_front(t); }
-        void push_back(const term_t &t) { bound = true; value.push_back(t); }
-        void push_back(term_t &&t) { bound = true; value.emplace_back(t); }
-        void pop_front() { if(!bound) throw unbound(); value.pop_front(); }
-        void pop_back() { if(!bound) throw unbound(); value.pop_back(); }
+        void push_front(const term_t &t) { bound = true; value.push_front(t); refs.push_front(&t); }
+        void push_front(term_t &&t) { bound = true; value.emplace_front(t); refs.push_front(&t); }
+        void push_back(const term_t &t) { bound = true; value.push_back(t); refs.push_back(&t); }
+        void push_back(term_t &&t) { bound = true; value.emplace_back(t); refs.push_back(&t); }
+        void pop_front() { if(!bound) throw unbound(); value.pop_front(); refs.pop_front(); }
+        void pop_back() { if(!bound) throw unbound(); value.pop_back(); refs.pop_back(); }
         term_t &front() { if(!bound) throw unbound(); return value.front(); }
         const term_t &front() const { if(!bound) throw unbound(); return value.front(); }
         term_t &back() { if(!bound) throw unbound(); return value.back(); }
@@ -209,6 +227,7 @@ class base_t<deque<term_t>, variant> : public term_check {
 
     protected:
         deque<term_t> value;
+        deque<void*> refs;
         bool bound;
 };
 
