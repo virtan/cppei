@@ -25,7 +25,7 @@ class term_t {
         term_t(term_t &&o) : ptr(o.ptr) { o.ptr = 0; }
         template<class T> term_t(T &&o
                 , typename enable_if<is_base_of<term_check, typename decay<T>::type>::value>::type* = 0)
-            : ptr(new impl<typename decay<T>::type>(forward<T>(o))) {}
+            : ptr(new impl<typename decay<T>::type>(forward<T>(o))) { cout << "using this constructor " << typeid(T).name() << "\n"; }
         term_t &operator=(const term_t &o) { delete ptr; ptr = o.ptr ? o.ptr->clone() : 0; return *this; }
         term_t &operator=(term_t &o) { delete ptr; ptr = o.ptr ? o.ptr->clone() : 0; return *this; }
         term_t &operator=(term_t &&o) { delete ptr; ptr = o.ptr; o.ptr = 0; return *this; }
