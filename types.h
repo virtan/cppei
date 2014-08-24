@@ -10,11 +10,17 @@ namespace cppei {
 
 using namespace std;
 
-class unbound : public std::exception {
+template<const char Desc[]>
+class local_exception : public std::exception {
     public:
-        unbound() {}
-        const char *what() const throw() { return "unbound variable"; }
+        local_exception() {}
+        const char *what() const throw() { return Desc; }
 };
+
+constexpr char le_unbound[] = "unbound variable";
+typedef local_exception<le_unbound> unbound;
+constexpr char le_incompatible[] = "incompatible type";
+typedef local_exception<le_incompatible> incompatible;
 
 class term_check {};
 
@@ -25,7 +31,7 @@ class term_t {
         term_t(term_t &&o) : ptr(o.ptr) { o.ptr = 0; }
         template<class T> term_t(T &&o
                 , typename enable_if<is_base_of<term_check, typename decay<T>::type>::value>::type* = 0)
-            : ptr(new impl<typename decay<T>::type>(forward<T>(o))) { cout << "using this constructor " << typeid(T).name() << "\n"; }
+            : ptr(new impl<typename decay<T>::type>(forward<T>(o))) {}
         term_t &operator=(const term_t &o) { delete ptr; ptr = o.ptr ? o.ptr->clone() : 0; return *this; }
         term_t &operator=(term_t &o) { delete ptr; ptr = o.ptr ? o.ptr->clone() : 0; return *this; }
         term_t &operator=(term_t &&o) { delete ptr; ptr = o.ptr; o.ptr = 0; return *this; }
@@ -70,6 +76,17 @@ class term_t {
             assert(p);
             std::swap(t, p->val);
         }
+        template<class T> T &cast() {
+            typename enable_if<is_base_of<term_check, typename decay<T>::type>::value>::type *check;
+            if(!is_bound()) throw unbound();
+            impl<typename decay<T>::type> *p = dynamic_cast<impl<typename decay<T>::type>*>(ptr);
+            if(p == 0) { // different types
+                throw incompatible();
+            } else {
+                return forward<T&>(p->val);
+            }
+        }
+        template<class T> operator T () { return cast<T>(); }
         
     private:
         struct placeholder {
@@ -90,23 +107,32 @@ class term_t {
         placeholder *ptr;
 };
 
-template<class S>
+template<class S, int variant = 0>
 class base_t : public term_check {
     public:
+        // types
+        enum empty_t { empty };
+        // constructors
         base_t() : bound(false) {}
+        base_t(empty_t) : value(S()), bound(true) {}
         base_t(const base_t &o) { operator=(o); }
         base_t(base_t &&o) { operator=(forward<base_t>(o)); }
         base_t(const term_t &o) { *this = o; }
         base_t(term_t &&o) { *this = move(o); }
+        base_t(const S &t) : value(t), bound(true) {}
+        base_t(S &&t) : value(forward<S>(t)), bound(true) {}
+        // assign operators
         base_t &operator=(const base_t &o) { value = o.value; bound = o.bound; }
         base_t &operator=(base_t &&o) { value = move(o.value); bound = o.bound; o.bound = false; }
         base_t &operator=(const term_t &o) { o.clone(*this); return *this; }
         base_t &operator=(term_t &&o) { o.swap(*this); o = term_t(); return *this; }
-        base_t(const S &t) : value(t), bound(true) {}
-        base_t(S &&t) : value(forward<S>(t)), bound(true) {}
         base_t &operator=(const S &t) { value = t; bound = true; return *this; }
         base_t &operator=(S &&t) { value = forward<S>(t); bound = true; return *this; }
-        bool operator==(const base_t &o) const { if(!bound || !o.bound) throw unbound(); return value == o.value; }
+        // comparison operators
+        bool operator==(const base_t &o) const {
+            if(!bound || !o.bound) throw unbound();
+            return value == o.value;
+        }
         bool operator!=(const base_t &o) const { return !operator==(o); }
         bool operator==(const S &t) const { if(!bound) throw unbound(); return value == t; }
         bool operator!=(const S &t) const { return !operator==(t); }
@@ -115,43 +141,52 @@ class base_t : public term_check {
         bool operator>(const S &t) const { return bound && value > t; }
         bool operator<=(const S &t) const { return operator<(t) || operator==(t); }
         bool operator>=(const S &t) const { return operator>(t) || operator==(t); }
+        // casting
         operator const S& () const { if(!bound) throw unbound(); return value; }
+        // swap and is_bound
         void swap(base_t &o) { std::swap(bound, o.bound); std::swap(value, o.value); }
         void swap(S &s) { if(!bound) throw unbound(); std::swap(value, s); }
         bool is_bound() const { return bound; }
+
     protected:
         S value;
         bool bound;
 };
 
-typedef base_t<string> atom_t;
-typedef base_t<int> integer_t;
-typedef base_t<double> floating_t;
-typedef base_t<string> binary_t;
-
-template<int sub_type>
-class container_t : public base_t<deque<term_t>> {
+template<int variant>
+class base_t<deque<term_t>, variant> : public term_check {
     public:
-        enum empty_t { empty_list };
+        // types
+        enum empty_t { empty };
         typedef deque<term_t>::iterator iterator;
         typedef deque<term_t>::const_iterator const_iterator;
-        container_t() { bound = false; }
-        container_t(empty_t) { bound = true; }
+        // constructors
+        base_t() : bound(false) {}
+        base_t(empty_t) : bound(true) {}
+        base_t(const base_t &o) { operator=(o); }
+        base_t(base_t &&o) { operator=(forward<base_t>(o)); }
+        base_t(const term_t &o) { *this = o; }
+        base_t(term_t &&o) { *this = move(o); }
         template<class... Types>
-        container_t(Types... args...) {
+        base_t(Types... args...) {
             bound = true;
             [](...){}((value.push_front(args),1)...);
         }
-        container_t(const container_t &o) { operator=(o); }
-        container_t(container_t &&o) { operator=(forward<container_t>(o)); }
-        container_t &operator=(const container_t &o) { value = o.value; bound = o.bound; }
-        container_t &operator=(container_t &&o) { value = move(o.value); bound = o.bound; o.bound = false; }
-        bool operator==(const container_t &o) const {
-            if(!bound || !o.bound) throw unbound(); return value == o.value;
+        // assign operators
+        base_t &operator=(const base_t &o) { value = o.value; bound = o.bound; }
+        base_t &operator=(base_t &&o) { value = move(o.value); bound = o.bound; o.bound = false; }
+        base_t &operator=(const term_t &o) { o.clone(*this); return *this; }
+        base_t &operator=(term_t &&o) { o.swap(*this); o = term_t(); return *this; }
+        // comparison operators
+        bool operator==(const base_t &o) const {
+            if(!bound || !o.bound) throw unbound();
+            return value == o.value;
         }
-        bool operator!=(const container_t &o) const { return !operator==(o); }
-        void swap(container_t &o) { std::swap(bound, o.bound); std::swap(value, o.value); }
+        bool operator!=(const base_t &o) const { return !operator==(o); }
+        // swap and is_bound
+        void swap(base_t &o) { std::swap(bound, o.bound); std::swap(value, o.value); }
         bool is_bound() const { return bound; }
+        // container-related methods
         iterator begin() { return value.begin(); }
         iterator end() { return value.end(); }
         const_iterator begin() const { return value.begin(); }
@@ -167,9 +202,18 @@ class container_t : public base_t<deque<term_t>> {
         const term_t &front() const { if(!bound) throw unbound(); return value.front(); }
         term_t &back() { if(!bound) throw unbound(); return value.back(); }
         const term_t &back() const { if(!bound) throw unbound(); return value.back(); }
+
+    protected:
+        deque<term_t> value;
+        bool bound;
 };
 
-typedef container_t<0> tuple_t;
-typedef container_t<1> list_t;
+typedef base_t<string> atom_t;
+typedef base_t<int> integer_t;
+typedef base_t<double> floating_t;
+typedef base_t<string> binary_t;
+
+typedef base_t<deque<term_t>, 0> tuple_t;
+typedef base_t<deque<term_t>, 1> list_t;
 
 }
