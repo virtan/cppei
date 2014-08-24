@@ -26,12 +26,15 @@ class term_check {};
 
 class term_t {
     public:
+        // constructors
         term_t() : ptr(0) {}
         term_t(const term_t &o) : ptr(o.ptr ? o.ptr->clone() : 0) {}
         term_t(term_t &&o) : ptr(o.ptr) { o.ptr = 0; }
         template<class T> term_t(T &&o
                 , typename enable_if<is_base_of<term_check, typename decay<T>::type>::value>::type* = 0)
             : ptr(new impl<typename decay<T>::type>(forward<T>(o))) {}
+        ~term_t() { delete ptr; }
+        // assign operators
         term_t &operator=(const term_t &o) { delete ptr; ptr = o.ptr ? o.ptr->clone() : 0; return *this; }
         term_t &operator=(term_t &o) { delete ptr; ptr = o.ptr ? o.ptr->clone() : 0; return *this; }
         term_t &operator=(term_t &&o) { delete ptr; ptr = o.ptr; o.ptr = 0; return *this; }
@@ -41,8 +44,7 @@ class term_t {
             ptr = new impl<typename decay<T>::type>(forward<T>(o));
             return *this;
         }
-        ~term_t() { delete ptr; }
-        bool is_bound() const { return ptr != 0; }
+        // comparison operators
         bool operator==(const term_t &t) const {
             if(!is_bound() || !t.is_bound()) throw unbound();
             if(ptr->type() != t.ptr->type()) {
@@ -62,6 +64,8 @@ class term_t {
             }
         }
         template<class T> bool operator!=(const T &t) const { return !operator==(t); }
+        // clone, swap, casting and is_bound methods
+        bool is_bound() const { return ptr != 0; }
         template<class T> void clone(T &t
                 , typename enable_if<is_base_of<term_check, typename decay<T>::type>::value>::type* = 0) const {
             if(!is_bound()) throw unbound();
