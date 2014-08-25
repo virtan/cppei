@@ -46,9 +46,7 @@ class term_t {
         }
         // comparison operators
         bool operator==(const term_t &t) const {
-            if(!is_bound() || !t.is_bound()) throw unbound();
-            if(ptr->type() != t.ptr->type()) return false;
-            else return ptr->operator==(t.ptr);
+            return match_type(t) ? ptr->operator==(t.ptr) : false;
         }
         template<class T> bool operator==(const T &t) const {
             typename enable_if<is_base_of<term_check, typename decay<T>::type>::value>::type *check;
@@ -57,12 +55,21 @@ class term_t {
             else return p->val == t;
         }
         template<class T> bool operator!=(const T &t) const { return !operator==(t); }
+        bool match_type(const term_t &t) const {
+            if(ptr == 0 || t.ptr == 0) throw unbound();
+            if(ptr->type() != t.ptr->type()) return false;
+            return true;
+        }
         template<class T> bool match_type(const T &) const {
             typename enable_if<is_base_of<term_check, typename decay<T>::type>::value>::type *check;
             return dcast<T>() != 0;
         }
         // clone, swap, casting and is_bound methods
-        bool is_bound() const { return ptr != 0; }
+        bool is_bound() const { return ptr != 0 && ptr->is_bound(); }
+        bool is_container() const { return ptr->is_container(); }
+        bool match_only(const term_t &t) const { return ptr->match_only(t); }
+        void assign_matched(const term_t &t) const { ptr->assign_matched(t); }
+        void clone(void *p2) const { ptr->clone(p2); }
         template<class T> void clone(T &t
                 , typename enable_if<is_base_of<term_check, typename decay<T>::type>::value>::type* = 0) const {
             auto p = dcast<T>();
@@ -76,7 +83,7 @@ class term_t {
             assert(p);
             std::swap(t, p->val);
         }
-        template<class T> T &cast() {
+        template<class T> T &cast() const {
             typename enable_if<is_base_of<term_check, typename decay<T>::type>::value>::type *check;
             auto p = dcast<T>();
             if(p == 0) throw incompatible(); // different types
@@ -85,27 +92,36 @@ class term_t {
         template<class T> operator T () { return cast<T>(); }
         
     private:
-        template<class T> impl<typename decay<T>::type> *dcast() {
-            if(!is_bound()) throw unbound();
-            impl<typename decay<T>::type> *p = dynamic_cast<impl<typename decay<T>::type>*>(ptr);
-            return p; // 0 if different types
-        }
-
         struct placeholder {
             virtual ~placeholder() {}
             virtual const type_info &type() const = 0;
             virtual bool operator==(const placeholder *t) const = 0;
             virtual placeholder *clone() const = 0;
+            virtual void clone(void*) const = 0;
+            virtual bool is_bound() const = 0;
+            virtual bool is_container() const = 0;
+            virtual bool match_only(const term_t &) const = 0;
+            virtual void assign_matched(const term_t &) const = 0;
         };
-
         template<class T>
         struct impl : public placeholder {
             template<class T1> impl(T1 t) : val(t) {}
             const type_info &type() const { return typeid(T); }
             bool operator==(const placeholder *p) const { return val == dynamic_cast<const impl<T>*>(p)->val; }
             impl *clone() const { return new impl(val); }
+            void clone(void *p2) const { *(T*)p2 = val; }
+            bool is_bound() const { return val.is_bound(); }
+            bool is_container() const { return val.is_container(); }
+            bool match_only(const term_t &t) const { return val.match_only(t); }
+            void assign_matched(const term_t &t) const { val.assign_matched(t); }
             T val;
         };
+        template<class T> impl<typename decay<T>::type> *dcast() const {
+            if(!ptr) throw unbound();
+            impl<typename decay<T>::type> *p = dynamic_cast<impl<typename decay<T>::type>*>(ptr);
+            return p; // 0 if different types
+        }
+
         placeholder *ptr;
 };
 
@@ -152,6 +168,11 @@ class base_t : public term_check {
         bool is_container() const { return false; }
 
     protected:
+        bool match_only(const term_t &) const { return false; }
+        void assign_matched(const term_t &) const {}
+        friend class term_t;
+
+    protected:
         S value;
         bool bound;
 };
@@ -171,7 +192,7 @@ class base_t<deque<term_t>, variant> : public term_check {
         base_t(const term_t &o) { *this = o; }
         base_t(term_t &&o) { *this = move(o); }
         template<class... Types>
-        base_t(Types... args) {
+        base_t(const Types&... args) {
             bound = true;
             [](...){}((value.push_front(args), refs.push_front((void*) &args), 1)...);
         }
@@ -181,24 +202,21 @@ class base_t<deque<term_t>, variant> : public term_check {
         base_t &operator=(const term_t &o) { o.clone(*this); return *this; }
         base_t &operator=(term_t &&o) { o.swap(*this); o = term_t(); return *this; }
         // comparison and match operators
+        bool operator==(const term_t &t) const {
+            if(t.match_type(*this)) return this->operator==(t.cast<decltype(*this)>());
+        }
         bool operator==(const base_t &o) const {
-            if(!bound || !o.bound) throw unbound();
+            if(!o.is_bound()) throw unbound();
             if(is_bound()) return value == o.value;
             else if(size() != o.size()) return false;
             else {
                 assert(value.size() == refs.size());
-                auto vi = value.begin();
-                auto ri = refs.begin();
-                auto oi = o.begin();
-                while(vi != value.end()) {
-                    if(vi->is_bound() || vi->is_container()) { if(*vi != *oi) return false; }
-                    else if(vi->match_type(*oi)) { *vi = *oi; assign ri; }
-                    else return false;
-                    ++vi; ++ri; ++oi;
-                }
+                if(!match_only(o)) return false; // check matching, don't change
+                assign_matched(o); // matches, assign
                 return true;
             }
         }
+        bool operator!=(const term_t &t) const { return !operator==(t); }
         bool operator!=(const base_t &o) const { return !operator==(o); }
         // swap and is_bound
         void swap(base_t &o) { std::swap(bound, o.bound); std::swap(value, o.value); std::swap(refs, o.refs); }
@@ -214,16 +232,50 @@ class base_t<deque<term_t>, variant> : public term_check {
         const_iterator begin() const { return value.begin(); }
         const_iterator end() const { return value.end(); }
         size_t size() const { if(!bound) throw unbound(); return value.size(); }
-        void push_front(const term_t &t) { bound = true; value.push_front(t); refs.push_front(&t); }
-        void push_front(term_t &&t) { bound = true; value.emplace_front(t); refs.push_front(&t); }
-        void push_back(const term_t &t) { bound = true; value.push_back(t); refs.push_back(&t); }
-        void push_back(term_t &&t) { bound = true; value.emplace_back(t); refs.push_back(&t); }
+        void push_front(const term_t &t) { bound = true; value.push_front(t); refs.push_front((void*)&t); }
+        void push_front(term_t &&t) { bound = true; value.emplace_front(t); refs.push_front((void*)&t); }
+        void push_back(const term_t &t) { bound = true; value.push_back(t); refs.push_back((void*)&t); }
+        void push_back(term_t &&t) { bound = true; value.emplace_back(t); refs.push_back((void*)&t); }
         void pop_front() { if(!bound) throw unbound(); value.pop_front(); refs.pop_front(); }
         void pop_back() { if(!bound) throw unbound(); value.pop_back(); refs.pop_back(); }
         term_t &front() { if(!bound) throw unbound(); return value.front(); }
         const term_t &front() const { if(!bound) throw unbound(); return value.front(); }
         term_t &back() { if(!bound) throw unbound(); return value.back(); }
         const term_t &back() const { if(!bound) throw unbound(); return value.back(); }
+
+    protected:
+        // match-related methods
+        bool match_only(const term_t &t) const {
+            if(t.match_type(*this)) return match_only(t.cast<decltype(*this)>());
+        }
+        bool match_only(const base_t &o) const {
+            auto vi = value.begin(); auto oi = o.begin();
+            // compare bound, match_only containers, match_type unbound
+            while(vi != value.end()) {
+                if(vi->is_bound()) { if(*vi != *oi) return false; }
+                else {
+                    if(vi->is_container()) {
+                        if(!vi->match_only(*oi)) return false;
+                    } else { if(!vi->match_type(*oi)) return false; }
+                }
+                ++vi; ++oi;
+            }
+            return true;
+        }
+        void assign_matched(const term_t &t) const {
+            assign_matched(t.cast<decltype(*this)>());
+        }
+        void assign_matched(const base_t &o) const {
+            auto vi = value.begin(); auto ri = refs.begin(); auto oi = o.begin();
+            while(vi != value.end()) {
+                if(!vi->is_bound()) {
+                    if(vi->is_container()) vi->assign_matched(*oi);
+                    else { const_cast<term_t&>(*vi) = *oi; oi->clone(*ri); }
+                }
+                ++vi; ++ri; ++oi;
+            }
+        }
+        friend class term_t;
 
     protected:
         deque<term_t> value;

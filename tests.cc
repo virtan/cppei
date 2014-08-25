@@ -184,7 +184,7 @@ int main() {
     atom_t a("hello"); binary_t b;
     assert(a.is_bound());
     assert(!b.is_bound());
-    //assert((tuple_t(a, tuple_t(a, b)) = t) == true);
+    assert(tuple_t(a, tuple_t(a, b)) == t);
     assert(a == atom_t("hello"));
     assert(b.is_bound());
     assert(b == binary_t("world"));
